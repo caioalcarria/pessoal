@@ -3,6 +3,7 @@ import { signOut, onAuthStateChanged } from "firebase/auth";
 import {
   doc,
   setDoc,
+  getDoc,
   deleteDoc,
   onSnapshot,
   collection,
@@ -11,6 +12,7 @@ import {
   where,
   getDocs,
   writeBatch,
+  serverTimestamp,
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
@@ -108,6 +110,11 @@ function App() {
   const [exportContent, setExportContent] = useState("");
   const [exportTitle, setExportTitle] = useState("");
 
+  // Estados para compartilhamento
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareLink, setShareLink] = useState("");
+  const [isGeneratingLink, setIsGeneratingLink] = useState(false);
+
   // Toast notification
   const showToastMessage = (message) => {
     setToastMessage(message);
@@ -163,6 +170,26 @@ function App() {
     html += "</ul>";
 
     return html;
+  };
+
+  // Função para calcular horas totais e por projeto
+  const calculateTotalHours = () => {
+    const projectHours = {};
+    let totalHours = 0;
+
+    Object.values(currentLogs).forEach((log) => {
+      if (log && log.projects && log.projects.length > 0) {
+        const hoursMap = calculateHoursForLog(log);
+
+        log.projects.forEach((project) => {
+          const hours = hoursMap[project] || 0;
+          projectHours[project] = (projectHours[project] || 0) + hours;
+          totalHours += hours;
+        });
+      }
+    });
+
+    return { totalHours, projectHours };
   };
 
   // Navigation
@@ -270,11 +297,18 @@ function App() {
   };
 
   const handleProjectToggle = (projectName) => {
-    setSelectedProjects((prev) =>
-      prev.includes(projectName)
+    setSelectedProjects((prev) => {
+      const newProjects = prev.includes(projectName)
         ? prev.filter((p) => p !== projectName)
-        : [...prev, projectName]
-    );
+        : [...prev, projectName];
+
+      // Se adicionou um projeto, selecionar automaticamente no select
+      if (!prev.includes(projectName) && newProjects.includes(projectName)) {
+        setDefaultFileProject(projectName);
+      }
+
+      return newProjects;
+    });
   };
 
   const handleAddFile = () => {
@@ -359,23 +393,25 @@ function App() {
       const snapshot = await getDocs(q);
       snapshot.docs.forEach((doc) => {
         const log = doc.data();
-        if (log.files && log.projects) {
+        if (log.files && log.fileProjectMap) {
           const logFiles = log.files
             .split(",")
             .map((f) => f.trim())
             .filter((f) => f);
-          const hasSelectedProject = log.projects.includes(defaultFileProject);
 
-          if (hasSelectedProject) {
-            logFiles.forEach((file) => {
-              if (
-                file.toLowerCase().includes(input.toLowerCase()) &&
-                !files.includes(file)
-              ) {
-                suggestions.add(file);
-              }
-            });
-          }
+          logFiles.forEach((file) => {
+            // Verificar se o arquivo pertence ao projeto selecionado
+            const fileProject = log.fileProjectMap[file];
+            const isFromSelectedProject = fileProject === defaultFileProject;
+
+            if (
+              isFromSelectedProject &&
+              file.toLowerCase().includes(input.toLowerCase()) &&
+              !files.includes(file)
+            ) {
+              suggestions.add(file);
+            }
+          });
         }
       });
 
@@ -408,6 +444,11 @@ function App() {
   const handleDefaultProjectChange = (projectName) => {
     if (projectName && selectedProjects.includes(projectName)) {
       setDefaultFileProject(projectName);
+
+      // Atualizar sugestões se há texto no input
+      if (newFile.trim()) {
+        getFileSuggestions(newFile);
+      }
     }
   };
 
@@ -528,6 +569,9 @@ function App() {
         data
       );
       showToastMessage("Registro salvo com sucesso!");
+
+      // ATUALIZAR AUTOMATICAMENTE O LINK COMPARTILHADO
+      await updateShareLink();
     }
     closeLogModal();
   };
@@ -537,7 +581,79 @@ function App() {
       doc(db, `artifacts/${appId}/users/${userId}/logs`, selectedDate)
     );
     showToastMessage("Registro excluído.");
+
+    // ATUALIZAR AUTOMATICAMENTE O LINK COMPARTILHADO
+    await updateShareLink();
+
     closeLogModal();
+  };
+
+  // Função para excluir diretamente da lista
+  const handleDeleteFromList = async (dateStr) => {
+    if (confirm("Tem certeza que deseja excluir este registro?")) {
+      try {
+        await deleteDoc(
+          doc(db, `artifacts/${appId}/users/${userId}/logs`, dateStr)
+        );
+        showToastMessage("Registro excluído.");
+
+        // ATUALIZAR AUTOMATICAMENTE O LINK COMPARTILHADO
+        await updateShareLink();
+      } catch (error) {
+        console.error("Erro ao excluir registro:", error);
+        showToastMessage("Erro ao excluir registro.");
+      }
+    }
+  };
+
+  // Função para copiar arquivos de um projeto específico
+  const handleCopyProjectFiles = async (projectName) => {
+    try {
+      // Organizar arquivos por projeto e categoria
+      const projectFiles = {};
+
+      files.forEach((file) => {
+        const fileProject = fileProjectMap[file] || "Sem projeto";
+        const fileCategory = fileCategoryMap[file] || getFileCategory(file);
+
+        if (fileProject === projectName) {
+          if (!projectFiles[projectName]) {
+            projectFiles[projectName] = {};
+          }
+          if (!projectFiles[projectName][fileCategory]) {
+            projectFiles[projectName][fileCategory] = [];
+          }
+          projectFiles[projectName][fileCategory].push(file);
+        }
+      });
+
+      if (
+        !projectFiles[projectName] ||
+        Object.keys(projectFiles[projectName]).length === 0
+      ) {
+        showToastMessage(
+          `Nenhum arquivo encontrado para o projeto "${projectName}"`
+        );
+        return;
+      }
+
+      // Formatar texto com subgrupos e indentação
+      let formattedText = `${projectName.toUpperCase()}\n`;
+
+      Object.entries(projectFiles[projectName]).forEach(([category, files]) => {
+        formattedText += `\n${getCategoryName(category)}\n`;
+        files.forEach((file) => {
+          formattedText += `- ${file}\n`;
+        });
+      });
+
+      // Copiar para clipboard
+      await navigator.clipboard.writeText(formattedText);
+      showToastMessage(`Arquivos do projeto "${projectName}" copiados!`);
+    } catch (error) {
+      console.error("Erro ao copiar arquivos do projeto:", error);
+      showToastMessage("Erro ao copiar arquivos do projeto.");
+    }
   };
 
   const handleDuplicateClick = (dateStr) => {
@@ -641,6 +757,9 @@ function App() {
           showToastMessage(
             `${importedCount} registros importados com sucesso!`
           );
+
+          // ATUALIZAR AUTOMATICAMENTE O LINK COMPARTILHADO
+          await updateShareLink();
         } else {
           showToastMessage(
             "Nenhum registro válido para o mês atual encontrado no arquivo."
@@ -1053,6 +1172,10 @@ function App() {
       { projects, description, files, userId }
     );
     showToastMessage(`Tarefa duplicada para ${duplicateTargetDate}!`);
+
+    // ATUALIZAR AUTOMATICAMENTE O LINK COMPARTILHADO
+    await updateShareLink();
+
     setDuplicateModalOpen(false);
     setDuplicateSourceDate("");
     setDuplicateTargetDate("");
@@ -1070,6 +1193,152 @@ function App() {
     setExportModalOpen(false);
     setExportContent("");
     setExportTitle("");
+  };
+
+  // Função para atualizar automaticamente o link compartilhado
+  const updateShareLink = async () => {
+    if (!userId) return;
+
+    try {
+      // Preparar dados do mês atual
+      const year = currentDate.getFullYear();
+      const month = currentDate.getMonth() + 1;
+      const monthKey = `${userId}_${year}_${month}`;
+      const shareId = `share_${monthKey}`;
+
+      // Verificar se existe um link para este mês
+      const existingShareDoc = await getDoc(
+        doc(db, `artifacts/${appId}/shares`, shareId)
+      );
+
+      if (existingShareDoc.exists()) {
+        // Buscar logs atualizados do mês
+        const logs = await getLogsForCurrentMonth();
+
+        // Atualizar dados do link compartilhado
+        const existingData = existingShareDoc.data();
+        const updatedShareData = {
+          ...existingData,
+          logs: logs,
+          updatedAt: serverTimestamp(),
+        };
+
+        await setDoc(
+          doc(db, `artifacts/${appId}/shares`, shareId),
+          updatedShareData
+        );
+
+        console.log("✅ Link compartilhado atualizado automaticamente!");
+      }
+    } catch (error) {
+      console.error("Erro ao atualizar link compartilhado:", error);
+    }
+  };
+
+  // Funções de compartilhamento
+  const generateShareLink = async () => {
+    if (!userId) {
+      showToastMessage("Usuário não autenticado.");
+      return;
+    }
+
+    setIsGeneratingLink(true);
+    try {
+      // Preparar dados do mês atual
+      const year = currentDate.getFullYear();
+      const month = currentDate.getMonth() + 1;
+      const monthName = currentDate.toLocaleDateString("pt-BR", {
+        month: "long",
+        year: "numeric",
+      });
+
+      // Criar ID único baseado no usuário e mês (sempre o mesmo para o mês)
+      const monthKey = `${userId}_${year}_${month}`;
+      const shareId = `share_${monthKey}`;
+
+      // Buscar logs do mês atual
+      const logs = await getLogsForCurrentMonth();
+
+      // SEMPRE atualizar ou criar o link
+      const shareData = {
+        shareId,
+        userId,
+        userName: user.displayName || user.email,
+        month: month,
+        year: year,
+        monthName: monthName,
+        logs: logs,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 dias
+        isActive: true,
+      };
+
+      await setDoc(doc(db, `artifacts/${appId}/shares`, shareId), shareData);
+
+      // Gerar URL de compartilhamento
+      const shareUrl = `${window.location.origin}/share/${shareId}`;
+      setShareLink(shareUrl);
+      setShareModalOpen(true);
+
+      showToastMessage("Link de compartilhamento atualizado com sucesso!");
+    } catch (error) {
+      console.error("Erro ao gerar link:", error);
+      showToastMessage("Erro ao gerar link de compartilhamento.");
+    } finally {
+      setIsGeneratingLink(false);
+    }
+  };
+
+  const openShareModal = async () => {
+    setShareModalOpen(true);
+
+    // Sempre verificar se já existe um link para o mês atual
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth() + 1;
+    const monthKey = `${userId}_${year}_${month}`;
+    const shareId = `share_${monthKey}`;
+
+    try {
+      // Verificar se já existe um link para este mês
+      const existingShareDoc = await getDoc(
+        doc(db, `artifacts/${appId}/shares`, shareId)
+      );
+
+      if (existingShareDoc.exists()) {
+        // Se existe, usar o link existente
+        const shareUrl = `${window.location.origin}/share/${shareId}`;
+        setShareLink(shareUrl);
+        showToastMessage("Link existente carregado!");
+      } else {
+        // Se não existe, criar novo
+        await generateShareLink();
+      }
+    } catch (error) {
+      console.error("Erro ao verificar link existente:", error);
+      await generateShareLink();
+    }
+  };
+
+  const closeShareModal = () => {
+    setShareModalOpen(false);
+    setShareLink("");
+  };
+
+  const copyShareLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareLink);
+      showToastMessage("Link copiado para a área de transferência!");
+    } catch (error) {
+      // Fallback para navegadores mais antigos
+      const textArea = document.createElement("textarea");
+      textArea.value = shareLink;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+      showToastMessage("Link copiado para a área de transferência!");
+    }
   };
 
   const renderDuplicateCalendar = () => {
@@ -1389,6 +1658,14 @@ function App() {
                 >
                   Editar
                 </button>
+                <button
+                  data-date={dateStr}
+                  className="delete-log-btn px-3 py-1 bg-red-100 text-red-600 rounded-md hover:bg-red-200"
+                  title="Excluir"
+                  onClick={() => handleDeleteFromList(dateStr)}
+                >
+                  <i className="fas fa-trash"></i>
+                </button>
               </div>
             </div>
             <div className="mt-3 text-sm text-slate-700 space-y-2">
@@ -1511,6 +1788,13 @@ function App() {
               onClick={openProjectsModal}
             >
               <i className="fas fa-tags mr-2"></i>Projetos
+            </button>
+            <button
+              id="share-btn"
+              className="px-4 py-2 bg-green-600 text-white rounded-lg shadow-sm hover:bg-green-700 transition-colors"
+              onClick={openShareModal}
+            >
+              <i className="fas fa-share-alt mr-2"></i>Compartilhar
             </button>
             <div className="relative">
               <button
@@ -1639,6 +1923,41 @@ function App() {
                 <div id="calendar-grid" className="grid grid-cols-7 gap-2">
                   {renderCalendar()}
                 </div>
+
+                {/* Painel de Horas */}
+                {(() => {
+                  const { totalHours, projectHours } = calculateTotalHours();
+                  return (
+                    <div className="mt-6 bg-slate-50 rounded-lg pt-4 pb-4">
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                        <div>
+                          <h3 className="text-lg font-semibold text-slate-800 mb-2">
+                            Resumo de Horas -{" "}
+                            {currentDate.toLocaleDateString("pt-BR", {
+                              month: "long",
+                              year: "numeric",
+                            })}
+                          </h3>
+                          <div className="text-2xl font-bold text-blue-600">
+                            Total: {totalHours}h
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {Object.entries(projectHours)
+                            .sort(([, a], [, b]) => b - a)
+                            .map(([project, hours]) => (
+                              <div
+                                key={project}
+                                className="px-3 py-2 bg-blue-100 text-blue-800 rounded-lg font-semibold"
+                              >
+                                {project}: {hours}h
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
               <div
                 id="list-view"
@@ -1660,10 +1979,10 @@ function App() {
           onClick={closeLogModal}
         >
           <div
-            className="bg-white rounded-xl shadow-2xl w-11/12 max-w-2xl transform transition-all"
+            className="bg-white rounded-xl shadow-2xl w-11/12 max-w-2xl max-h-[90vh] overflow-hidden transform transition-all"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="p-6">
+            <div className="p-6 overflow-y-auto max-h-[90vh]">
               <div className="flex justify-between items-start">
                 <h2 className="text-xl font-bold text-slate-800">
                   Registrar Atividade -{" "}
@@ -1778,13 +2097,22 @@ function App() {
                     </div>
                   )}
 
-                  <div className="mt-2 max-h-70 overflow-y-auto space-y-3">
+                  <div className="mt-2 max-h-96 overflow-y-auto space-y-3 pr-2">
                     {Object.entries(organizeFilesByProject()).map(
                       ([project, categories]) => (
                         <div key={project} className="space-y-3">
-                          <h4 className="font-semibold text-sm text-slate-700 border-b border-slate-200 pb-2">
-                            {project}
-                          </h4>
+                          <div className="flex items-center border-b border-slate-200 pb-2">
+                            <button
+                              className="copy-project-files-btn px-2 py-1 bg-green-100 text-green-600 rounded-md hover:bg-green-200 text-xs mr-2"
+                              title={`Copiar arquivos do projeto ${project}`}
+                              onClick={() => handleCopyProjectFiles(project)}
+                            >
+                              <i className="fas fa-copy"></i>
+                            </button>
+                            <h4 className="font-semibold text-sm text-slate-700">
+                              {project}
+                            </h4>
+                          </div>
                           {Object.entries(categories).map(
                             ([category, projectFiles]) => (
                               <div key={category} className="ml-2 space-y-2">
@@ -2166,6 +2494,80 @@ function App() {
                 >
                   Duplicar
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share Modal */}
+      {shareModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop"
+          onClick={closeShareModal}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-11/12 max-w-md"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6">
+              <div className="flex justify-between items-start">
+                <h2 className="text-xl font-bold text-slate-800">
+                  Compartilhar Mês
+                </h2>
+                <button
+                  className="text-slate-400 hover:text-slate-600"
+                  onClick={closeShareModal}
+                >
+                  &times;
+                </button>
+              </div>
+              <div className="mt-4">
+                <p className="text-sm text-slate-600 mb-4">
+                  Compartilhando dados de{" "}
+                  <strong>
+                    {currentDate.toLocaleDateString("pt-BR", {
+                      month: "long",
+                      year: "numeric",
+                    })}
+                  </strong>
+                </p>
+                {isGeneratingLink ? (
+                  <div className="flex items-center justify-center py-8">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                    <span className="ml-3 text-slate-600">Gerando link...</span>
+                  </div>
+                ) : shareLink ? (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-600 mb-2">
+                        Link de Compartilhamento
+                      </label>
+                      <div className="flex space-x-2">
+                        <input
+                          type="text"
+                          value={shareLink}
+                          readOnly
+                          className="flex-grow p-2 border border-slate-300 rounded-lg bg-slate-50 text-sm"
+                        />
+                        <button
+                          onClick={copyShareLink}
+                          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                          title="Copiar link"
+                        >
+                          <i className="fas fa-copy"></i>
+                        </button>
+                      </div>
+                    </div>
+                    <div className="bg-blue-50 p-3 rounded-lg">
+                      <p className="text-sm text-blue-800">
+                        <i className="fas fa-info-circle mr-2"></i>
+                        Este link permite visualizar os dados sem necessidade de
+                        login. O link expira em 30 dias.
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
