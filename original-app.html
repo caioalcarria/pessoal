@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registro de Atividades Diárias</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc; /* slate-50 */
+        }
+        .modal-backdrop {
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        .calendar-day:not(.disabled):hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .toast {
+            animation: fade-in-out 5s forwards;
+        }
+        @keyframes fade-in-out {
+            0% { opacity: 0; transform: translateY(20px); }
+            10% { opacity: 1; transform: translateY(0); }
+            90% { opacity: 1; transform: translateY(0); }
+            100% { opacity: 0; transform: translateY(20px); }
+        }
+        .view-btn.active {
+            background-color: #2563eb; /* blue-600 */
+            color: white;
+        }
+        #file-list-dynamic li, #duplicate-file-list li {
+            animation: slide-in 0.3s ease-out;
+        }
+        @keyframes slide-in {
+            from {
+                opacity: 0;
+                transform: translateX(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+        .spinner {
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #3498db;
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .mini-calendar-day.selected {
+            background-color: #2563eb;
+            color: white;
+            border-radius: 50%;
+        }
+        .mini-calendar-day:not(.disabled):not(.selected):hover {
+            background-color: #eff6ff;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+<body class="text-slate-800">
+
+    <div id="app" class="container mx-auto p-4 sm:p-6 lg:p-8">
+        <!-- Header -->
+        <header class="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
+            <div class="flex items-center space-x-2">
+                <button id="prev-month" class="p-2 rounded-full hover:bg-slate-200 transition-colors"><i class="fas fa-chevron-left"></i></button>
+                <h1 id="current-month-year" class="text-2xl font-bold text-slate-700 w-48 text-center"></h1>
+                <button id="next-month" class="p-2 rounded-full hover:bg-slate-200 transition-colors"><i class="fas fa-chevron-right"></i></button>
+                 <div class="ml-4 bg-slate-200 p-1 rounded-lg flex items-center">
+                    <button id="calendar-view-btn" class="view-btn active px-3 py-1 rounded-md text-sm" title="Visualização em Calendário"><i class="fas fa-calendar-days"></i></button>
+                    <button id="list-view-btn" class="view-btn px-3 py-1 rounded-md text-sm" title="Visualização em Lista"><i class="fas fa-list"></i></button>
+                </div>
+            </div>
+            <div class="flex items-center space-x-2">
+                 <button id="import-btn" class="px-4 py-2 bg-white border border-slate-300 text-slate-600 rounded-lg shadow-sm hover:bg-slate-100 transition-colors">
+                    <i class="fas fa-upload mr-2"></i>Importar
+                </button>
+                <button id="manage-projects-btn" class="px-4 py-2 bg-white border border-slate-300 text-slate-600 rounded-lg shadow-sm hover:bg-slate-100 transition-colors">
+                    <i class="fas fa-tags mr-2"></i>Projetos
+                </button>
+                <div class="relative">
+                    <button id="export-btn" class="px-4 py-2 bg-blue-600 text-white rounded-lg shadow-sm hover:bg-blue-700 transition-colors">
+                        <i class="fas fa-download mr-2"></i>Exportar
+                    </button>
+                    <div id="export-options" class="hidden absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-xl z-20">
+                        <a href="#" id="download-xlsx-btn" class="block px-4 py-2 text-slate-700 hover:bg-slate-100"><i class="fas fa-file-excel fa-fw mr-2"></i>Baixar Relatório (XLSX)</a>
+                        <a href="#" id="copy-table-btn" class="block px-4 py-2 text-slate-700 hover:bg-slate-100"><i class="fas fa-table fa-fw mr-2"></i>Copiar Tabela</a>
+                        <a href="#" id="export-summary-table-btn" class="block px-4 py-2 text-slate-700 hover:bg-slate-100"><i class="fas fa-chart-pie fa-fw mr-2"></i>Tabela Resumida</a>
+                        <a href="#" id="copy-text-teams-btn" class="block px-4 py-2 text-slate-700 hover:bg-slate-100"><i class="fab fa-teams fa-fw mr-2"></i>Copiar Texto (Teams)</a>
+                        <div class="border-t my-1"></div>
+                        <a href="#" id="export-ai-summary-btn" class="block px-4 py-2 text-slate-700 hover:bg-slate-100"><i class="fas fa-wand-magic-sparkles fa-fw mr-2"></i>Gerar Resumo com IA</a>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <div id="main-content">
+            <div id="calendar-view">
+                <div class="grid grid-cols-7 gap-2 mb-2">
+                    <div class="text-center font-semibold text-slate-500 text-sm">Dom</div><div class="text-center font-semibold text-slate-500 text-sm">Seg</div><div class="text-center font-semibold text-slate-500 text-sm">Ter</div><div class="text-center font-semibold text-slate-500 text-sm">Qua</div><div class="text-center font-semibold text-slate-500 text-sm">Qui</div><div class="text-center font-semibold text-slate-500 text-sm">Sex</div><div class="text-center font-semibold text-slate-500 text-sm">Sáb</div>
+                </div>
+                <div id="calendar-grid" class="grid grid-cols-7 gap-2"></div>
+            </div>
+            <div id="list-view" class="hidden space-y-3"></div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <!-- Log Entry Modal -->
+    <div id="log-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
+        <div class="bg-white rounded-xl shadow-2xl w-11/12 max-w-2xl transform transition-all">
+            <div class="p-6">
+                <div class="flex justify-between items-start"><h2 class="text-xl font-bold text-slate-800">Registrar Atividade - <span id="modal-date"></span></h2><button id="close-log-modal" class="text-slate-400 hover:text-slate-600">&times;</button></div>
+                <form id="log-form" class="mt-4 space-y-4">
+                    <input type="hidden" id="log-date-input">
+                    <div><label class="block text-sm font-medium text-slate-600 mb-1">Projetos</label><div id="projects-container" class="grid grid-cols-2 sm:grid-cols-3 gap-2"></div></div>
+                    <div>
+                        <div class="flex justify-between items-center mb-1">
+                            <label for="description" class="block text-sm font-medium text-slate-600">Descrição</label>
+                            <button type="button" id="generate-description-btn" class="text-sm text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"><span id="gemini-desc-spinner" class="hidden spinner"></span>✨ Melhorar com IA</button>
+                        </div>
+                        <textarea id="description" rows="4" class="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition" placeholder="Escreva uma breve descrição..."></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-600 mb-1">Arquivos editados</label>
+                        <div class="flex space-x-2"><input type="text" id="new-file-input" placeholder="Nome do arquivo" class="flex-grow p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"><button type="button" id="add-file-btn" class="px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors">Adicionar</button></div>
+                        <ul id="file-list-dynamic" class="mt-2 space-y-1 max-h-32 overflow-y-auto"></ul>
+                    </div>
+                    <div class="flex justify-end space-x-3 pt-4"><button type="button" id="delete-log-btn" class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors">Excluir</button><button type="submit" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">Salvar</button></div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Manage Projects Modal -->
+    <div id="projects-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
+        <div class="bg-white rounded-xl shadow-2xl w-11/12 max-w-md">
+            <div class="p-6">
+                <div class="flex justify-between items-start"><h2 class="text-xl font-bold text-slate-800">Gerenciar Projetos</h2><button id="close-projects-modal" class="text-slate-400 hover:text-slate-600">&times;</button></div>
+                <div class="mt-4"><form id="add-project-form" class="flex space-x-2"><input type="text" id="new-project-name" placeholder="Nome do novo projeto" class="flex-grow p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"><button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">Add</button></form></div>
+                <div id="project-list" class="mt-4 max-h-60 overflow-y-auto space-y-2"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Export Modal -->
+    <div id="export-view-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
+        <div class="bg-white rounded-xl shadow-2xl w-11/12 max-w-4xl h-5/6 flex flex-col">
+             <div class="p-6 border-b"><div class="flex justify-between items-center"><h2 class="text-xl font-bold text-slate-800">Exportar Dados - <span id="export-title"></span></h2><button id="close-export-modal" class="text-slate-400 hover:text-slate-600">&times;</button></div></div>
+            <div id="export-content" class="p-6 overflow-auto flex-grow prose max-w-none"></div>
+            <div class="p-4 bg-slate-50 border-t flex justify-end"><button id="copy-export-btn" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"><i class="fas fa-copy mr-2"></i>Copiar</button></div>
+        </div>
+    </div>
+    
+    <!-- Import Modal -->
+    <div id="import-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
+        <div class="bg-white rounded-xl shadow-2xl w-11/12 max-w-lg">
+            <div class="p-6">
+                <div class="flex justify-between items-start"><h2 class="text-xl font-bold text-slate-800">Importar Registros</h2><button id="close-import-modal" class="text-slate-400 hover:text-slate-600">&times;</button></div>
+                <div class="mt-4 text-sm text-slate-600 space-y-2"><p>Importe os registros para o mês de <strong id="import-month-name"></strong>.</p><p>O arquivo deve ter as colunas no formato correto. Você pode baixar o relatório e usá-lo como modelo.</p></div>
+                <div class="mt-4"><label for="import-file-input" class="block text-sm font-medium text-slate-700">Selecione o arquivo .xlsx</label><input type="file" id="import-file-input" accept=".xlsx, .xls" class="mt-1 block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/></div>
+                <div class="mt-6 flex justify-end"><button id="process-import-btn" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:bg-slate-400" disabled>Processar</button></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Duplicate Modal -->
+    <div id="duplicate-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
+        <div class="bg-white rounded-xl shadow-2xl w-11/12 max-w-md">
+            <div class="p-6">
+                <div class="flex justify-between items-start"><h2 class="text-xl font-bold text-slate-800">Duplicar Tarefa</h2><button id="close-duplicate-modal" class="text-slate-400 hover:text-slate-600">&times;</button></div>
+                <p class="text-sm text-slate-600 mt-2">Selecione o dia de destino para duplicar a tarefa de <strong id="duplicate-source-date"></strong>.</p>
+                <div id="duplicate-calendar-container" class="mt-4"></div>
+                <div class="mt-6 flex justify-end"><button id="confirm-duplicate-btn" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:bg-slate-400" disabled>Duplicar</button></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast-notification" class="hidden fixed bottom-5 right-5 bg-slate-800 text-white px-6 py-3 rounded-lg shadow-lg toast z-[100]"><p id="toast-message"></p></div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, addDoc, query, where, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Firebase Configuration ---
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-work-log';
+        let userId = null, currentLogs = {}, currentProjects = [], currentDate = new Date(), currentView = 'calendar';
+        let duplicateSourceLog = null, selectedDuplicateTargetDate = null;
+
+        // --- UI Elements ---
+        const calendarGrid = document.getElementById('calendar-grid');
+        const listView = document.getElementById('list-view');
+        const currentMonthYearEl = document.getElementById('current-month-year');
+        const logModal = document.getElementById('log-modal');
+        const projectsContainer = document.getElementById('projects-container');
+        const projectsModal = document.getElementById('projects-modal');
+        const exportViewModal = document.getElementById('export-view-modal');
+        const importModal = document.getElementById('import-modal');
+        const duplicateModal = document.getElementById('duplicate-modal');
+        const toastMessage = document.getElementById('toast-message');
+        const fileListDynamic = document.getElementById('file-list-dynamic'), newFileInput = document.getElementById('new-file-input');
+        const descriptionTextarea = document.getElementById('description');
+
+        // --- Toast Notification ---
+        function showToast(message) {
+            toastMessage.textContent = message;
+            document.getElementById('toast-notification').classList.remove('hidden');
+            setTimeout(() => document.getElementById('toast-notification').classList.add('hidden'), 5000);
+        }
+
+        // --- Gemini API Call ---
+        async function callGemini(prompt, retries = 3, delay = 1000) {
+            const apiKey = ""; // Provided by the environment
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            
+            const payload = {
+                contents: [{ role: "user", parts: [{ text: prompt }] }]
+            };
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const result = await response.json();
+                
+                if (result.candidates && result.candidates.length > 0 &&
+                    result.candidates[0].content && result.candidates[0].content.parts &&
+                    result.candidates[0].content.parts.length > 0) {
+                    return result.candidates[0].content.parts[0].text;
+                } else {
+                    throw new Error("Resposta da API inválida ou vazia.");
+                }
+            } catch (error) {
+                if (retries > 0) {
+                    await new Promise(res => setTimeout(res, delay));
+                    return callGemini(prompt, retries - 1, delay * 2); // Exponential backoff
+                } else {
+                    console.error("Erro na chamada da API Gemini:", error);
+                    throw error;
+                }
+            }
+        }
+        
+        // --- Helper Functions ---
+        function calculateHoursForLog(log) {
+            const hoursMap = {};
+            if (!log || !log.projects || log.projects.length === 0) return hoursMap;
+            
+            const numProjects = log.projects.length;
+            const baseHours = Math.floor(6 / numProjects);
+            let remainder = 6 % numProjects;
+            
+            log.projects.forEach(projectName => {
+                let hours = baseHours;
+                if (remainder > 0) {
+                    hours++;
+                    remainder--;
+                }
+                hoursMap[projectName] = hours;
+            });
+            return hoursMap;
+        }
+
+        // --- View Logic ---
+        function setView(view) {
+            currentView = view;
+            document.getElementById('calendar-view').classList.toggle('hidden', view !== 'calendar');
+            listView.classList.toggle('hidden', view !== 'list');
+            document.getElementById('calendar-view-btn').classList.toggle('active', view === 'calendar');
+            document.getElementById('list-view-btn').classList.toggle('active', view === 'list');
+            renderCurrentView();
+        }
+
+        function renderCurrentView() {
+            currentMonthYearEl.textContent = currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+            if (currentView === 'calendar') renderCalendar();
+            else renderListView();
+        }
+        
+        function parseAndRenderFiles(filesString, isList = false) {
+            if (!filesString) return '';
+            const files = filesString.split(',').map(f => f.trim()).filter(f => f);
+            if (files.length === 0) return '';
+            const listClass = isList ? 'list-disc list-inside text-slate-600 text-sm pl-2' : 'list-disc list-inside text-slate-500 text-xs pl-2';
+            return `<h4 class="font-semibold mt-2 text-slate-600">Arquivos:</h4><ul class="${listClass}">${files.map(file => `<li>${file}</li>`).join('')}</ul>`;
+        }
+
+        function renderCalendar() {
+            calendarGrid.innerHTML = '';
+            const year = currentDate.getFullYear(), month = currentDate.getMonth();
+            const firstDayOfMonth = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+            for (let i = 0; i < firstDayOfMonth; i++) calendarGrid.insertAdjacentHTML('beforeend', '<div></div>');
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dayEl = document.createElement('div');
+                const fullDate = new Date(year, month, day);
+                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const isWeekend = [0, 6].includes(fullDate.getDay());
+                dayEl.className = 'calendar-day p-2 border rounded-lg h-48 flex flex-col transition-all duration-200 overflow-hidden';
+                
+                if (isWeekend) {
+                    dayEl.classList.add('bg-slate-100', 'text-slate-400', 'cursor-not-allowed', 'disabled');
+                } else {
+                    dayEl.classList.add('bg-white', 'hover:bg-blue-50', 'cursor-pointer');
+                    dayEl.addEventListener('click', () => openLogModal(dateStr));
+                }
+
+                const log = currentLogs[dateStr];
+                const hoursMap = calculateHoursForLog(log);
+                const projectPills = log?.projects?.map(p => `<span class="text-xs font-semibold bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full"><span class="font-bold">${hoursMap[p] || 0}h</span> ${p}</span>`).join('') || '';
+                const descriptionPreview = log?.description ? `<p class="text-xs text-slate-600 mt-2 truncate">${log.description}</p>` : '';
+                const filesList = log?.files ? parseAndRenderFiles(log.files, false) : '';
+                const duplicateIcon = log ? `<button title="Duplicar tarefa" data-date="${dateStr}" class="duplicate-log-btn absolute top-1 right-1 text-slate-400 hover:text-blue-600 p-1"><i class="fas fa-copy fa-xs"></i></button>` : '';
+
+                dayEl.innerHTML = `<div class="relative"><span class="font-bold">${day}</span>${duplicateIcon}</div><div class="mt-1 flex flex-wrap gap-1 text-xs">${projectPills}</div><div class="mt-1 overflow-y-auto text-xs flex-grow">${descriptionPreview}${filesList}</div>`;
+                calendarGrid.appendChild(dayEl);
+            }
+            document.querySelectorAll('.duplicate-log-btn').forEach(btn => btn.addEventListener('click', (e) => { e.stopPropagation(); openDuplicateModal(e.currentTarget.dataset.date); }));
+        }
+
+        function renderListView() {
+            listView.innerHTML = '';
+            const year = currentDate.getFullYear(), month = currentDate.getMonth();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const fullDate = new Date(year, month, day);
+                if ([0, 6].includes(fullDate.getDay())) continue;
+
+                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const log = currentLogs[dateStr];
+                const formattedDate = fullDate.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' });
+                
+                let itemHTML;
+                if (log) {
+                    const hoursMap = calculateHoursForLog(log);
+                    const projectPills = log.projects?.map(p => `<span class="text-sm font-semibold bg-blue-100 text-blue-800 px-2 py-1 rounded-full"><span class="font-bold">${hoursMap[p] || 0}h</span> ${p}</span>`).join('') || '';
+                    const filesList = parseAndRenderFiles(log.files, true);
+                    itemHTML = `<div class="bg-white p-4 rounded-lg border shadow-sm"><div class="flex justify-between items-start"><div><h3 class="font-bold text-lg text-slate-800">${formattedDate}</h3><div class="flex flex-wrap gap-2 mt-2">${projectPills}</div></div><div class="flex gap-2"><button data-date="${dateStr}" class="duplicate-log-btn px-3 py-1 bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200" title="Duplicar"><i class="fas fa-copy"></i></button><button data-date="${dateStr}" class="edit-log-btn px-3 py-1 bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200">Editar</button></div></div><div class="mt-3 text-sm text-slate-700 space-y-2"><p class="whitespace-pre-wrap">${log.description || 'Nenhuma descrição.'}</p>${filesList}</div></div>`;
+                } else {
+                    itemHTML = `<div class="bg-white/60 p-4 rounded-lg border border-dashed"><div class="flex justify-between items-center"><h3 class="font-bold text-slate-500">${formattedDate}</h3><button data-date="${dateStr}" class="add-log-btn px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600">Adicionar</button></div></div>`;
+                }
+                listView.insertAdjacentHTML('beforeend', itemHTML);
+            }
+            if (!listView.innerHTML) listView.innerHTML = '<p class="text-center text-slate-500 py-8">Nenhum dia útil neste mês.</p>';
+
+            document.querySelectorAll('.edit-log-btn, .add-log-btn').forEach(btn => btn.addEventListener('click', (e) => openLogModal(e.currentTarget.dataset.date)));
+            document.querySelectorAll('.duplicate-log-btn').forEach(btn => btn.addEventListener('click', (e) => openDuplicateModal(e.currentTarget.dataset.date)));
+        }
+
+        // --- Modal Logic ---
+        function openLogModal(dateStr) {
+            const date = new Date(dateStr + 'T00:00:00');
+            document.getElementById('modal-date').textContent = date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' });
+            document.getElementById('log-date-input').value = dateStr;
+            const log = currentLogs[dateStr] || {};
+            descriptionTextarea.value = log.description || '';
+            renderProjectCheckboxes(log.projects || []);
+            renderDynamicFileList(log.files || '');
+            document.getElementById('delete-log-btn').style.display = (log.description || log.files || log.projects?.length > 0) ? 'block' : 'none';
+            logModal.classList.remove('hidden');
+        }
+
+        function closeModal(modal) { modal.classList.add('hidden'); }
+
+        function renderProjectCheckboxes(selectedProjects = []) {
+            projectsContainer.innerHTML = '';
+            currentProjects.forEach(project => {
+                projectsContainer.insertAdjacentHTML('beforeend', `<label class="flex items-center space-x-2 p-2 rounded-md hover:bg-slate-100 cursor-pointer"><input type="checkbox" name="project" value="${project.name}" ${selectedProjects.includes(project.name) ? 'checked' : ''} class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"><span>${project.name}</span></label>`);
+            });
+        }
+
+        function renderProjectList() {
+            document.getElementById('project-list').innerHTML = '';
+            currentProjects.forEach(project => {
+                document.getElementById('project-list').insertAdjacentHTML('beforeend', `<div class="flex justify-between items-center p-2 bg-slate-100 rounded-lg"><span>${project.name}</span><button data-id="${project.id}" class="delete-project-btn text-red-500 hover:text-red-700"><i class="fas fa-trash"></i></button></div>`);
+            });
+            document.querySelectorAll('.delete-project-btn').forEach(btn => btn.addEventListener('click', (e) => deleteProject(e.currentTarget.dataset.id)));
+        }
+        
+        function renderDynamicFileList(filesString) {
+            fileListDynamic.innerHTML = '';
+            const files = filesString.split(',').map(f => f.trim()).filter(f => f);
+            files.forEach(addFileToListUI);
+        }
+
+        function addFileToListUI(fileName) {
+            const li = document.createElement('li');
+            li.className = 'flex justify-between items-center p-1.5 bg-slate-100 rounded-md text-sm';
+            li.innerHTML = `<span>${fileName}</span><button type="button" class="text-red-500 hover:text-red-700">&times;</button>`;
+            li.querySelector('button').addEventListener('click', () => li.remove());
+            fileListDynamic.appendChild(li);
+        }
+        
+        // --- Duplicate Logic ---
+        function openDuplicateModal(sourceDateStr) {
+            duplicateSourceLog = { date: sourceDateStr, ...currentLogs[sourceDateStr] };
+            selectedDuplicateTargetDate = null;
+            document.getElementById('duplicate-source-date').textContent = new Date(sourceDateStr + 'T00:00:00').toLocaleDateString('pt-BR');
+            document.getElementById('confirm-duplicate-btn').disabled = true;
+            renderDuplicateCalendar(currentDate);
+            duplicateModal.classList.remove('hidden');
+        }
+
+        function renderDuplicateCalendar(dateToRender) {
+            const container = document.getElementById('duplicate-calendar-container');
+            const year = dateToRender.getFullYear(), month = dateToRender.getMonth();
+            let html = `<div class="text-center font-bold mb-2">${dateToRender.toLocaleDateString('pt-BR', {month: 'long', year: 'numeric'})}</div>`;
+            html += `<div class="grid grid-cols-7 gap-1 text-center text-xs text-slate-500"><div>D</div><div>S</div><div>T</div><div>Q</div><div>Q</div><div>S</div><div>S</div></div>`;
+            html += `<div class="grid grid-cols-7 gap-1 mt-1">`;
+            const firstDay = new Date(year, month, 1).getDay();
+            for (let i = 0; i < firstDay; i++) html += '<div></div>';
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            for (let day = 1; day <= daysInMonth; day++) {
+                const date = new Date(year, month, day);
+                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const isWeekend = [0, 6].includes(date.getDay());
+                const isSource = dateStr === duplicateSourceLog.date;
+                const classes = ['mini-calendar-day w-8 h-8 flex items-center justify-center cursor-pointer transition-colors'];
+                if (isWeekend || isSource) {
+                    classes.push('text-slate-400 cursor-not-allowed disabled');
+                    if (isSource) classes.push('bg-slate-200 rounded-full');
+                }
+                html += `<div class="${classes.join(' ')}" data-date="${dateStr}">${day}</div>`;
+            }
+            html += '</div>';
+            container.innerHTML = html;
+            container.querySelectorAll('.mini-calendar-day:not(.disabled)').forEach(dayEl => {
+                dayEl.addEventListener('click', () => {
+                    container.querySelectorAll('.mini-calendar-day').forEach(d => d.classList.remove('selected'));
+                    dayEl.classList.add('selected');
+                    selectedDuplicateTargetDate = dayEl.dataset.date;
+                    document.getElementById('confirm-duplicate-btn').disabled = false;
+                });
+            });
+        }
+
+        async function processDuplication() {
+            if (!duplicateSourceLog || !selectedDuplicateTargetDate) return;
+            const { projects, description, files } = duplicateSourceLog;
+            await setDoc(doc(db, `artifacts/${appId}/users/${userId}/logs`, selectedDuplicateTargetDate), { projects, description, files, userId });
+            showToast(`Tarefa duplicada para ${selectedDuplicateTargetDate}!`);
+            closeModal(duplicateModal);
+        }
+
+        // --- Firestore Logic ---
+        async function authAndLoad() {
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    userId = user.uid;
+                    await setupInitialProjects();
+                    listenToProjects();
+                    listenToLogs();
+                }
+            });
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) await signInWithCustomToken(auth, __initial_auth_token);
+                else await signInAnonymously(auth);
+            } catch (error) { console.error("Auth failed:", error); showToast("Falha na autenticação."); }
+        }
+
+        async function setupInitialProjects() {
+            const projectsRef = collection(db, `artifacts/${appId}/public/data/projects`);
+            const q = query(projectsRef);
+            const querySnapshot = await getDocs(q);
+            if (querySnapshot.empty) {
+                const batch = writeBatch(db);
+                ['CMPC', 'Tekno', 'Melitta', 'Essentia'].forEach(name => batch.set(doc(projectsRef), { name }));
+                await batch.commit();
+            }
+        }
+
+        function listenToProjects() {
+            const projectsRef = collection(db, `artifacts/${appId}/public/data/projects`);
+            onSnapshot(query(projectsRef), (snapshot) => {
+                currentProjects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.name.localeCompare(b.name));
+                renderProjectList();
+            });
+        }
+        
+        function listenToLogs() {
+            if (!userId) return;
+            const logsRef = collection(db, `artifacts/${appId}/users/${userId}/logs`);
+            onSnapshot(query(logsRef), (snapshot) => {
+                currentLogs = {};
+                snapshot.docs.forEach(doc => { currentLogs[doc.id] = doc.data(); });
+                renderCurrentView();
+            });
+        }
+
+        async function saveLog(e) {
+            e.preventDefault();
+            const date = document.getElementById('log-date-input').value;
+            const selectedProjects = Array.from(document.querySelectorAll('input[name="project"]:checked')).map(el => el.value);
+            const files = Array.from(fileListDynamic.querySelectorAll('li span')).map(span => span.textContent);
+            const data = { description: descriptionTextarea.value.trim(), files: files.join(','), projects: selectedProjects, userId: userId };
+            
+            if (!data.description && !data.files && data.projects.length === 0) {
+                await deleteLog(date);
+            } else {
+                await setDoc(doc(db, `artifacts/${appId}/users/${userId}/logs`, date), data);
+                showToast('Registro salvo com sucesso!');
+            }
+            closeModal(logModal);
+        }
+
+        async function deleteLog(date) {
+            if (!date) date = document.getElementById('log-date-input').value;
+            await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/logs`, date));
+            showToast('Registro excluído.');
+            closeModal(logModal);
+        }
+
+        async function addProject(e) {
+            e.preventDefault();
+            const nameInput = document.getElementById('new-project-name');
+            if (nameInput.value.trim()) {
+                await addDoc(collection(db, `artifacts/${appId}/public/data/projects`), { name: nameInput.value.trim() });
+                nameInput.value = '';
+                showToast('Projeto adicionado!');
+            }
+        }
+
+        async function deleteProject(id) {
+            await deleteDoc(doc(db, `artifacts/${appId}/public/data/projects`, id));
+            showToast('Projeto excluído.');
+        }
+
+        // --- Import/Export Logic ---
+        async function getLogsForCurrentMonth() {
+            if (!userId) return [];
+            const year = currentDate.getFullYear(), month = String(currentDate.getMonth() + 1).padStart(2, '0');
+            const startDate = `${year}-${month}-01`, endDate = `${year}-${month}-${new Date(year, month, 0).getDate()}`;
+            const q = query(collection(db, `artifacts/${appId}/users/${userId}/logs`), where('__name__', '>=', startDate), where('__name__', '<=', endDate));
+            const snapshot = await getDocs(q);
+            return snapshot.docs.map(doc => ({ date: doc.id, ...doc.data() })).sort((a, b) => a.date.localeCompare(b.date));
+        }
+
+        async function downloadXLSX() {
+            const logs = await getLogsForCurrentMonth();
+            if (logs.length === 0) { showToast('Nenhum registro para exportar.'); return; }
+            const dataToExport = logs.map(log => ({
+                'Data (YYYY-MM-DD)': log.date,
+                'Projetos': log.projects.join(', '),
+                'Descrição': log.description,
+                'Arquivos': log.files
+            }));
+            
+            const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+
+            // Style header
+            const headerStyle = { font: { bold: true }, fill: { fgColor: { rgb: "DDEEFF" } } };
+            const range = XLSX.utils.decode_range(worksheet['!ref']);
+            for(let C = range.s.c; C <= range.e.c; ++C) {
+                const address = XLSX.utils.encode_cell({r:0, c:C}); 
+                if(!worksheet[address]) continue;
+                worksheet[address].s = headerStyle;
+            }
+
+            // Set column widths
+            const colWidths = Object.keys(dataToExport[0]).map(key => ({
+                wch: dataToExport.reduce((w, r) => Math.max(w, r[key] ? r[key].length : 10), key.length)
+            }));
+            worksheet['!cols'] = colWidths;
+
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Registros");
+            XLSX.writeFile(workbook, `relatorio_${currentDate.getFullYear()}_${currentDate.getMonth()+1}.xlsx`);
+        }
+
+        async function processImport(file) {
+            if (!file) { showToast("Nenhum arquivo selecionado."); return; }
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array', cellDates: true });
+                    const sheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[sheetName];
+                    const json = XLSX.utils.sheet_to_json(worksheet);
+
+                    const year = currentDate.getFullYear();
+                    const month = currentDate.getMonth(); // 0-indexed
+                    const batch = writeBatch(db);
+                    let importedCount = 0;
+
+                    json.forEach(row => {
+                        const dateValue = row['Data (YYYY-MM-DD)'] || row['Data'];
+                        if (!dateValue) return;
+
+                        let parsedDate;
+                        if (dateValue instanceof Date) {
+                            parsedDate = dateValue;
+                        } else if (typeof dateValue === 'string') {
+                            const parts = dateValue.split(/[-/]/);
+                            if (parts.length === 3) {
+                                parsedDate = new Date(parts[0], parts[1] - 1, parts[2]);
+                            }
+                        }
+
+                        if (!parsedDate || isNaN(parsedDate) || parsedDate.getFullYear() !== year || parsedDate.getMonth() !== month) {
+                            return;
+                        }
+
+                        const dateStr = `${parsedDate.getFullYear()}-${String(parsedDate.getMonth() + 1).padStart(2, '0')}-${String(parsedDate.getDate()).padStart(2, '0')}`;
+                        
+                        const logData = {
+                            projects: (row['Projetos'] || '').toString().split(',').map(p => p.trim()).filter(Boolean),
+                            description: (row['Descrição'] || '').toString().trim(),
+                            files: (row['Arquivos'] || '').toString().trim(),
+                            userId: userId
+                        };
+                        batch.set(doc(db, `artifacts/${appId}/users/${userId}/logs`, dateStr), logData);
+                        importedCount++;
+                    });
+
+                    if (importedCount > 0) {
+                        await batch.commit();
+                        showToast(`${importedCount} registros importados com sucesso!`);
+                    } else {
+                        showToast("Nenhum registro válido para o mês atual encontrado no arquivo.");
+                    }
+                } catch (error) {
+                    console.error("Import error:", error);
+                    showToast("Erro ao processar o arquivo. Verifique o formato.");
+                } finally {
+                    closeModal(importModal);
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+        
+        async function exportForCopy(type) {
+            const logs = await getLogsForCurrentMonth();
+            if (logs.length === 0) { showToast('Nenhum registro para exportar.'); return; }
+            
+            const exportContent = document.getElementById('export-content');
+            exportContent.dataset.contentType = type;
+            let content = '';
+
+            if (type === 'table') {
+                content = `<table class="w-full text-left border-collapse"><thead><tr class="bg-slate-100"><th class="p-2 border">Data</th><th class="p-2 border">Projetos</th><th class="p-2 border">Descrição</th><th class="p-2 border">Arquivos</th></tr></thead><tbody>`;
+                logs.forEach(log => { content += `<tr><td class="p-2 border align-top">${new Date(log.date + 'T00:00:00').toLocaleDateString('pt-BR')}</td><td class="p-2 border align-top">${log.projects.join(', ')}</td><td class="p-2 border align-top whitespace-pre-wrap">${log.description}</td><td class="p-2 border align-top whitespace-pre-wrap">${log.files}</td></tr>`; });
+                content += '</tbody></table>';
+            } else { // Teams Formatted Text
+                content = `**Relatório de Atividades - ${currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}**\n\n---\n\n`;
+                logs.forEach(log => {
+                    const date = new Date(log.date + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' });
+                    content += `**${date}**\n`;
+                    if(log.projects.length > 0) content += `* **Projetos:** ${log.projects.join(', ')}\n`;
+                    if(log.description) content += `* **Descrição:** ${log.description}\n`;
+                    if(log.files) content += `* **Arquivos:** ${log.files.replace(/,/g, ', ')}\n`;
+                    content += `\n---\n\n`;
+                });
+                content = `<pre class="whitespace-pre-wrap text-sm">${content}</pre>`;
+            }
+            document.getElementById('export-title').textContent = currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+            exportContent.innerHTML = content;
+            exportViewModal.classList.remove('hidden');
+        }
+
+        async function exportSummaryTable() {
+            const exportContent = document.getElementById('export-content');
+            exportContent.dataset.contentType = 'table';
+            const monthName = currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+            document.getElementById('export-title').textContent = `Tabela Resumida de ${monthName}`;
+            exportContent.innerHTML = '<div class="flex items-center justify-center h-full"><div class="spinner"></div><p class="ml-4">Calculando horas e gerando resumos... Por favor, aguarde.</p></div>';
+            exportViewModal.classList.remove('hidden');
+
+            const logs = await getLogsForCurrentMonth();
+            if (logs.length === 0) {
+                showToast('Nenhum registro para resumir.');
+                exportContent.innerHTML = '<p>Nenhum registro para resumir.</p>';
+                return;
+            }
+
+            const projectData = {};
+            logs.forEach(log => {
+                const hoursMap = calculateHoursForLog(log);
+                log.projects.forEach((projectName) => {
+                    if (!projectData[projectName]) {
+                        projectData[projectName] = { hours: 0, descriptions: [] };
+                    }
+                    projectData[projectName].hours += hoursMap[projectName] || 0;
+                    if (log.description) {
+                        projectData[projectName].descriptions.push(log.description);
+                    }
+                });
+            });
+
+            const summaryPromises = Object.entries(projectData).map(async ([projectName, data]) => {
+                if (data.descriptions.length === 0) {
+                    return [projectName, 'Nenhuma atividade descrita.'];
+                }
+                const prompt = `Para o projeto '${projectName}', crie um micro resumo de uma frase focado APENAS nas atividades relevantes para este projeto, com base nas descrições a seguir. Ignore menções a outros projetos. Seja extremamente conciso, em português do Brasil.\n\nDescrições:\n- ${data.descriptions.join('\n- ')}`;
+                try {
+                    const summary = await callGemini(prompt);
+                    return [projectName, summary];
+                } catch (error) {
+                    return [projectName, 'Falha ao gerar resumo.'];
+                }
+            });
+            
+            try {
+                const summaries = await Promise.all(summaryPromises);
+                summaries.forEach(([projectName, summary]) => {
+                    if (projectData[projectName]) {
+                        projectData[projectName].summary = summary;
+                    }
+                });
+
+                let tableHTML = `<table class="w-full text-left border-collapse"><thead><tr class="bg-slate-100"><th class="p-2 border">Projeto</th><th class="p-2 border">Total de Horas</th><th class="p-2 border">Resumo das Atividades (IA)</th></tr></thead><tbody>`;
+                for (const projectName in projectData) {
+                    const data = projectData[projectName];
+                    tableHTML += `<tr><td class="p-2 border align-top font-semibold">${projectName}</td><td class="p-2 border align-top text-center">${data.hours}</td><td class="p-2 border align-top">${data.summary}</td></tr>`;
+                }
+                tableHTML += '</tbody></table>';
+                exportContent.innerHTML = tableHTML;
+
+            } catch (error) {
+                showToast('Ocorreu um erro ao gerar os resumos.');
+                exportContent.innerHTML = '<p class="text-red-500">Ocorreu um erro geral. Tente novamente.</p>';
+            }
+        }
+
+        function simpleMarkdownToHtml(md) {
+            return md.replace(/^## (.*$)/gim, '<h2 class="text-xl font-bold mt-4 mb-2">$1</h2>').replace(/^# (.*$)/gim, '<h1 class="text-2xl font-bold mt-5 mb-3">$1</h1>').replace(/^\* (.*$)/gim, '<li class="ml-4">$1</li>').replace(/^- (.*$)/gim, '<li class="ml-4">$1</li>').replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>').replace(/\n/g, '<br>');
+        }
+
+        async function generateAiSummary() {
+            const exportContent = document.getElementById('export-content');
+            exportContent.dataset.contentType = 'text';
+            exportContent.innerHTML = '<div class="flex items-center justify-center h-full"><div class="spinner"></div><p class="ml-4">Gerando resumo...</p></div>';
+            exportViewModal.classList.remove('hidden');
+            const logs = await getLogsForCurrentMonth();
+            if (logs.length === 0) { showToast('Nenhum registro para resumir.'); exportContent.innerHTML = '<p>Nenhum registro para resumir.</p>'; return; }
+            const monthName = currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+            const formattedLogs = logs.map(log => `Data: ${log.date}\nProjetos: ${log.projects.join(', ')}\nDescrição: ${log.description}\nArquivos: ${log.files}\n`).join('\n---\n');
+            const prompt = `A seguir estão meus registros de trabalho para ${monthName}. Por favor, sintetize essas informações em um resumo profissional e conciso em formato markdown. Destaque as principais realizações, os projetos em que me concentrei e o progresso geral. A saída deve ser bem estruturada, em português do Brasil, e pronta para ser compartilhada com um gerente.\n\nRegistros:\n\n${formattedLogs}`;
+            try {
+                const summary = await callGemini(prompt);
+                exportContent.innerHTML = simpleMarkdownToHtml(summary);
+                document.getElementById('export-title').textContent = `Resumo de ${monthName}`;
+            } catch (error) { showToast('Falha ao gerar o resumo com IA.'); exportContent.innerHTML = '<p class="text-red-500">Ocorreu um erro ao gerar o resumo.</p>'; }
+        }
+
+        function copyToClipboard() {
+            const exportContent = document.getElementById('export-content');
+            const contentType = exportContent.dataset.contentType;
+            if (contentType === 'table') {
+                const table = exportContent.querySelector('table');
+                if (table) {
+                    const range = document.createRange();
+                    range.selectNode(table);
+                    window.getSelection().removeAllRanges();
+                    window.getSelection().addRange(range);
+                    try {
+                        document.execCommand('copy');
+                        showToast('Tabela copiada!');
+                    } catch (err) {
+                        showToast('Falha ao copiar tabela.');
+                    }
+                    window.getSelection().removeAllRanges();
+                }
+            } else {
+                const text = exportContent.innerText;
+                navigator.clipboard.writeText(text).then(() => {
+                    showToast('Texto copiado!');
+                }, () => {
+                    showToast('Falha ao copiar texto.');
+                });
+            }
+        }
+
+        // --- Event Listeners ---
+        document.getElementById('prev-month').addEventListener('click', () => { currentDate.setMonth(currentDate.getMonth() - 1); renderCurrentView(); });
+        document.getElementById('next-month').addEventListener('click', () => { currentDate.setMonth(currentDate.getMonth() + 1); renderCurrentView(); });
+        document.getElementById('calendar-view-btn').addEventListener('click', () => setView('calendar'));
+        document.getElementById('list-view-btn').addEventListener('click', () => setView('list'));
+        document.getElementById('log-form').addEventListener('submit', saveLog);
+        document.getElementById('delete-log-btn').addEventListener('click', () => deleteLog());
+        document.getElementById('close-log-modal').addEventListener('click', () => closeModal(logModal));
+        document.getElementById('manage-projects-btn').addEventListener('click', () => projectsModal.classList.remove('hidden'));
+        document.getElementById('close-projects-modal').addEventListener('click', () => closeModal(projectsModal));
+        document.getElementById('add-project-form').addEventListener('submit', addProject);
+        document.getElementById('add-file-btn').addEventListener('click', () => { if (newFileInput.value.trim()) { addFileToListUI(newFileInput.value.trim()); newFileInput.value = ''; } newFileInput.focus(); });
+        newFileInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('add-file-btn').click(); } });
+        
+        const exportBtn = document.getElementById('export-btn'), exportOptions = document.getElementById('export-options');
+        exportBtn.addEventListener('click', () => exportOptions.classList.toggle('hidden'));
+        document.addEventListener('click', (e) => { if (!exportBtn.contains(e.target) && !exportOptions.contains(e.target)) exportOptions.classList.add('hidden'); });
+        
+        document.getElementById('download-xlsx-btn').addEventListener('click', (e) => { e.preventDefault(); downloadXLSX(); exportOptions.classList.add('hidden'); });
+        document.getElementById('copy-table-btn').addEventListener('click', (e) => { e.preventDefault(); exportForCopy('table'); exportOptions.classList.add('hidden'); });
+        document.getElementById('export-summary-table-btn').addEventListener('click', (e) => { e.preventDefault(); exportSummaryTable(); exportOptions.classList.add('hidden'); });
+        document.getElementById('copy-text-teams-btn').addEventListener('click', (e) => { e.preventDefault(); exportForCopy('teams-text'); exportOptions.classList.add('hidden'); });
+        document.getElementById('export-ai-summary-btn').addEventListener('click', (e) => { e.preventDefault(); generateAiSummary(); exportOptions.classList.add('hidden'); });
+        
+        document.getElementById('close-export-modal').addEventListener('click', () => closeModal(exportViewModal));
+        document.getElementById('copy-export-btn').addEventListener('click', copyToClipboard);
+
+        document.getElementById('import-btn').addEventListener('click', () => { document.getElementById('import-month-name').textContent = currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }); importModal.classList.remove('hidden'); });
+        document.getElementById('close-import-modal').addEventListener('click', () => closeModal(importModal));
+        
+        const importFileInput = document.getElementById('import-file-input'), processImportBtn = document.getElementById('process-import-btn');
+        importFileInput.addEventListener('change', () => { processImportBtn.disabled = !importFileInput.files.length; });
+        processImportBtn.addEventListener('click', () => processImport(importFileInput.files[0]));
+
+        document.getElementById('generate-description-btn').addEventListener('click', async () => {
+            const spinner = document.getElementById('gemini-desc-spinner');
+            if (!descriptionTextarea.value.trim()) { showToast("Escreva uma descrição para a IA melhorar."); return; }
+            spinner.classList.remove('hidden');
+            const prompt = `Reescreva a seguinte descrição de uma tarefa de trabalho para que soe mais profissional e detalhada, em português do Brasil: "${descriptionTextarea.value.trim()}"`;
+            try { descriptionTextarea.value = await callGemini(prompt); } 
+            catch (error) { showToast("Falha ao gerar sugestão. Tente novamente."); } 
+            finally { spinner.classList.add('hidden'); }
+        });
+        
+        document.getElementById('close-duplicate-modal').addEventListener('click', () => closeModal(duplicateModal));
+        document.getElementById('confirm-duplicate-btn').addEventListener('click', processDuplication);
+
+        // --- Initial Load ---
+        authAndLoad();
+    </script>
+</body>
+</html>
